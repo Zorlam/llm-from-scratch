@@ -1,6 +1,7 @@
-"""Train or resume a small GPT language model."""
+"""Train or resume a BPE-based GPT language model."""
 
 import argparse
+import hashlib
 import math
 import time
 from pathlib import Path
@@ -10,11 +11,11 @@ import torch
 
 from gpt.data import get_batch
 from gpt.model import GPTConfig, GPTLanguageModel
-from gpt.tokenizer import CharTokenizer
+from gpt.tokenizer import BPETokenizer
 
 
-DATA_DIR = Path("data/processed")
-CHECKPOINT_DIR = Path("checkpoints")
+DATA_DIR = Path("data/processed_bpe")
+CHECKPOINT_DIR = Path("checkpoints/bpe")
 DEVICE = "cpu"
 
 BATCH_SIZE = 16
@@ -34,7 +35,7 @@ SEED = 1337
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Train or resume the GPT language model."
+        description="Train or resume the BPE-based GPT language model."
     )
 
     parser.add_argument(
@@ -57,6 +58,14 @@ def parse_args():
         parser.error("--max-steps must be at least 1.")
 
     return args
+
+
+def get_tokenizer_fingerprint(path):
+    """Create a SHA-256 fingerprint of the tokenizer file."""
+
+    return hashlib.sha256(
+        Path(path).read_bytes()
+    ).hexdigest()
 
 
 def get_learning_rate(
@@ -119,6 +128,7 @@ def save_checkpoint(
     config,
     step,
     val_loss,
+    tokenizer_fingerprint,
 ):
     """Save model weights, optimizer state, and training progress."""
 
@@ -136,6 +146,7 @@ def save_checkpoint(
             },
             "step": step,
             "val_loss": val_loss,
+            "tokenizer_fingerprint": tokenizer_fingerprint,
         },
         path,
     )
@@ -147,10 +158,25 @@ def main():
     torch.manual_seed(SEED)
     np.random.seed(SEED)
 
-    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    CHECKPOINT_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     print(f"Device: {DEVICE}")
-    print("Loading dataset...")
+    print("Loading BPE dataset...")
+
+    required_files = [
+        DATA_DIR / "train.bin",
+        DATA_DIR / "val.bin",
+        DATA_DIR / "tokenizer.json",
+    ]
+
+    for file_path in required_files:
+        if not file_path.exists():
+            raise FileNotFoundError(
+                f"Required dataset file not found: {file_path}"
+            )
 
     train_data = np.fromfile(
         DATA_DIR / "train.bin",
@@ -162,13 +188,30 @@ def main():
         dtype=np.uint16,
     )
 
-    tokenizer = CharTokenizer.load(
-        DATA_DIR / "tokenizer.json"
+    tokenizer_path = DATA_DIR / "tokenizer.json"
+
+    tokenizer = BPETokenizer.load(tokenizer_path)
+
+    tokenizer_fingerprint = get_tokenizer_fingerprint(
+        tokenizer_path
     )
+
+    if len(train_data) == 0 or len(val_data) == 0:
+        raise ValueError(
+            "Training and validation datasets must not be empty."
+        )
+
+    if (
+        train_data.max() >= tokenizer.vocab_size
+        or val_data.max() >= tokenizer.vocab_size
+    ):
+        raise ValueError(
+            "Dataset contains token IDs outside the tokenizer vocabulary."
+        )
 
     print(f"Training tokens: {len(train_data):,}")
     print(f"Validation tokens: {len(val_data):,}")
-    print(f"Vocabulary size: {tokenizer.vocab_size}")
+    print(f"Vocabulary size: {tokenizer.vocab_size:,}")
 
     checkpoint = None
 
@@ -187,6 +230,22 @@ def main():
         )
 
         print(f"Loading checkpoint: {checkpoint_path}")
+
+        if "tokenizer_fingerprint" not in checkpoint:
+            raise ValueError(
+                "This checkpoint does not contain a tokenizer "
+                "fingerprint. It cannot safely be resumed with "
+                "the BPE training pipeline."
+            )
+
+        if (
+            checkpoint["tokenizer_fingerprint"]
+            != tokenizer_fingerprint
+        ):
+            raise ValueError(
+                "Checkpoint tokenizer does not match the "
+                "current BPE tokenizer."
+            )
 
         config = GPTConfig(**checkpoint["config"])
 
@@ -239,9 +298,10 @@ def main():
             )
 
         print(f"Checkpoint step: {start_step}")
-        print(f"Previous validation loss: {best_val_loss:.4f}")
+        print(
+            f"Previous validation loss: {best_val_loss:.4f}"
+        )
 
-    # Continue from the learning rate stored in the checkpoint.
     start_lr = optimizer.param_groups[0]["lr"]
 
     if start_lr < MIN_LEARNING_RATE:
@@ -297,12 +357,16 @@ def main():
     )
 
     print(f"Starting learning rate: {start_lr:.8f}")
-    print(f"Minimum learning rate: {MIN_LEARNING_RATE:.8f}\n")
+    print(
+        f"Minimum learning rate: {MIN_LEARNING_RATE:.8f}\n"
+    )
 
     model.train()
 
-    for step in range(start_step + 1, args.max_steps + 1):
-
+    for step in range(
+        start_step + 1,
+        args.max_steps + 1,
+    ):
         current_lr = get_learning_rate(
             step,
             start_step,
@@ -355,6 +419,7 @@ def main():
                 config,
                 step,
                 losses["val"],
+                tokenizer_fingerprint,
             )
 
             if losses["val"] < best_val_loss:
@@ -367,6 +432,7 @@ def main():
                     config,
                     step,
                     best_val_loss,
+                    tokenizer_fingerprint,
                 )
 
                 print("  Saved new best checkpoint.")

@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-from-scratch"
-version = "0.1.0"
-description = "A small GPT-style language model built and trained from scratch in PyTorch"
+version = "0.2.0"
+description = "A GPT-style language model built and trained from scratch in PyTorch"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.26",
     "torch>=2.2",
+    "tokenizers>=0.20",
 ]
 
 [tool.setuptools.packages.find]
