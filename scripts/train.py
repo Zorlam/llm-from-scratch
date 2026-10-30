@@ -21,7 +21,9 @@ BATCH_SIZE = 16
 BLOCK_SIZE = 64
 EVAL_INTERVAL = 200
 EVAL_BATCHES = 20
+
 LEARNING_RATE = 3e-4
+MIN_LEARNING_RATE = 3e-5
 
 N_EMBD = 64
 N_HEAD = 4
@@ -57,8 +59,38 @@ def parse_args():
     return args
 
 
-def save_checkpoint(path, model, optimizer, config, step, val_loss):
+def get_learning_rate(step, start_step, max_steps):
+    """Calculate the learning rate using cosine decay."""
+
+    progress = min(
+        (step - start_step) / (max_steps - start_step),
+        1.0,
+    )
+
+    cosine_decay = 0.5 * (
+        1.0 + math.cos(math.pi * progress)
+    )
+
+    learning_rate = (
+        MIN_LEARNING_RATE
+        + cosine_decay * (
+            LEARNING_RATE - MIN_LEARNING_RATE
+        )
+    )
+
+    return learning_rate
+
+
+def save_checkpoint(
+    path,
+    model,
+    optimizer,
+    config,
+    step,
+    val_loss,
+):
     """Save model weights, optimizer state, and training progress."""
+
     torch.save(
         {
             "model_state_dict": model.state_dict(),
@@ -93,10 +125,12 @@ def main():
         DATA_DIR / "train.bin",
         dtype=np.uint16,
     )
+
     val_data = np.fromfile(
         DATA_DIR / "val.bin",
         dtype=np.uint16,
     )
+
     tokenizer = CharTokenizer.load(
         DATA_DIR / "tokenizer.json"
     )
@@ -153,7 +187,9 @@ def main():
     best_val_loss = math.inf
 
     if checkpoint is not None:
-        model.load_state_dict(checkpoint["model_state_dict"])
+        model.load_state_dict(
+            checkpoint["model_state_dict"]
+        )
 
         start_step = checkpoint["step"]
         best_val_loss = checkpoint["val_loss"]
@@ -162,7 +198,9 @@ def main():
             optimizer.load_state_dict(
                 checkpoint["optimizer_state_dict"]
             )
+
             print("Optimizer state restored.")
+
         else:
             print(
                 "This checkpoint has no optimizer state. "
@@ -221,9 +259,22 @@ def main():
         f"to step {args.max_steps}...\n"
     )
 
+    print(f"Initial learning rate: {LEARNING_RATE:.6f}")
+    print(f"Minimum learning rate: {MIN_LEARNING_RATE:.6f}\n")
+
     model.train()
 
     for step in range(start_step + 1, args.max_steps + 1):
+
+        current_lr = get_learning_rate(
+            step,
+            start_step,
+            args.max_steps,
+        )
+
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = current_lr
+
         x, y = get_batch(
             train_data,
             batch_size=BATCH_SIZE,
@@ -243,7 +294,11 @@ def main():
 
         optimizer.step()
 
-        if step == 1 or step % EVAL_INTERVAL == 0 or step == args.max_steps:
+        if (
+            step == 1
+            or step % EVAL_INTERVAL == 0
+            or step == args.max_steps
+        ):
             losses = estimate_loss()
             elapsed = time.time() - start_time
 
@@ -251,6 +306,7 @@ def main():
                 f"Step {step:5d}/{args.max_steps} | "
                 f"train loss: {losses['train']:.4f} | "
                 f"val loss: {losses['val']:.4f} | "
+                f"lr: {current_lr:.6f} | "
                 f"time: {elapsed:.1f}s"
             )
 
@@ -278,8 +334,16 @@ def main():
                 print("  Saved new best checkpoint.")
 
     print("\nTraining complete.")
-    print(f"Latest checkpoint: {CHECKPOINT_DIR / 'latest_model.pt'}")
-    print(f"Best checkpoint: {CHECKPOINT_DIR / 'best_model.pt'}")
+
+    print(
+        f"Latest checkpoint: "
+        f"{CHECKPOINT_DIR / 'latest_model.pt'}"
+    )
+
+    print(
+        f"Best checkpoint: "
+        f"{CHECKPOINT_DIR / 'best_model.pt'}"
+    )
 
 
 if __name__ == "__main__":
