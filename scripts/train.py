@@ -59,7 +59,12 @@ def parse_args():
     return args
 
 
-def get_learning_rate(step, start_step, max_steps):
+def get_learning_rate(
+    step,
+    start_step,
+    max_steps,
+    start_lr,
+):
     """Calculate the learning rate using cosine decay."""
 
     progress = min(
@@ -74,11 +79,37 @@ def get_learning_rate(step, start_step, max_steps):
     learning_rate = (
         MIN_LEARNING_RATE
         + cosine_decay * (
-            LEARNING_RATE - MIN_LEARNING_RATE
+            start_lr - MIN_LEARNING_RATE
         )
     )
 
-    return learning_rate
+    return max(MIN_LEARNING_RATE, learning_rate)
+
+
+def create_eval_batches(train_data, val_data, block_size):
+    """Create fixed batches for consistent loss evaluation."""
+
+    eval_batches = {}
+
+    for name, data in (
+        ("train", train_data),
+        ("val", val_data),
+    ):
+        batches = []
+
+        for _ in range(EVAL_BATCHES):
+            x, y = get_batch(
+                data,
+                batch_size=BATCH_SIZE,
+                block_size=block_size,
+                device=DEVICE,
+            )
+
+            batches.append((x, y))
+
+        eval_batches[name] = batches
+
+    return eval_batches
 
 
 def save_checkpoint(
@@ -210,39 +241,11 @@ def main():
         print(f"Checkpoint step: {start_step}")
         print(f"Previous validation loss: {best_val_loss:.4f}")
 
-    parameter_count = sum(
-        parameter.numel()
-        for parameter in model.parameters()
-    )
+    # Continue from the learning rate stored in the checkpoint.
+    start_lr = optimizer.param_groups[0]["lr"]
 
-    print(f"Model parameters: {parameter_count:,}")
-
-    def estimate_loss():
-        model.eval()
-        results = {}
-
-        with torch.no_grad():
-            for name, data in (
-                ("train", train_data),
-                ("val", val_data),
-            ):
-                losses = []
-
-                for _ in range(EVAL_BATCHES):
-                    x, y = get_batch(
-                        data,
-                        batch_size=BATCH_SIZE,
-                        block_size=config.block_size,
-                        device=DEVICE,
-                    )
-
-                    _, loss = model(x, y)
-                    losses.append(loss.item())
-
-                results[name] = sum(losses) / len(losses)
-
-        model.train()
-        return results
+    if start_lr < MIN_LEARNING_RATE:
+        start_lr = MIN_LEARNING_RATE
 
     if start_step >= args.max_steps:
         print(
@@ -252,6 +255,40 @@ def main():
         )
         return
 
+    parameter_count = sum(
+        parameter.numel()
+        for parameter in model.parameters()
+    )
+
+    print(f"Model parameters: {parameter_count:,}")
+
+    print("\nPreparing fixed evaluation batches...")
+
+    eval_batches = create_eval_batches(
+        train_data,
+        val_data,
+        config.block_size,
+    )
+
+    print("Evaluation batches ready.")
+
+    def estimate_loss():
+        model.eval()
+        results = {}
+
+        with torch.no_grad():
+            for name, batches in eval_batches.items():
+                losses = []
+
+                for x, y in batches:
+                    _, loss = model(x, y)
+                    losses.append(loss.item())
+
+                results[name] = sum(losses) / len(losses)
+
+        model.train()
+        return results
+
     start_time = time.time()
 
     print(
@@ -259,8 +296,8 @@ def main():
         f"to step {args.max_steps}...\n"
     )
 
-    print(f"Initial learning rate: {LEARNING_RATE:.6f}")
-    print(f"Minimum learning rate: {MIN_LEARNING_RATE:.6f}\n")
+    print(f"Starting learning rate: {start_lr:.8f}")
+    print(f"Minimum learning rate: {MIN_LEARNING_RATE:.8f}\n")
 
     model.train()
 
@@ -270,6 +307,7 @@ def main():
             step,
             start_step,
             args.max_steps,
+            start_lr,
         )
 
         for param_group in optimizer.param_groups:
@@ -306,7 +344,7 @@ def main():
                 f"Step {step:5d}/{args.max_steps} | "
                 f"train loss: {losses['train']:.4f} | "
                 f"val loss: {losses['val']:.4f} | "
-                f"lr: {current_lr:.6f} | "
+                f"lr: {current_lr:.8f} | "
                 f"time: {elapsed:.1f}s"
             )
 
