@@ -8,11 +8,7 @@ from gpt.tokenizer import BPETokenizer
 
 
 def load_documents(input_path: str | Path) -> list[tuple[Path, str]]:
-    """Load text documents from a file or recursively from a directory.
-
-    Returns:
-        A list of (source_path, document_text) tuples.
-    """
+    """Load text documents from a file or recursively from a directory."""
 
     input_path = Path(input_path)
 
@@ -50,40 +46,103 @@ def load_documents(input_path: str | Path) -> list[tuple[Path, str]]:
     return documents
 
 
-def prepare_data(
-    raw_path: str | Path,
-    out_dir: str | Path,
+def split_documents(
+    documents: list[tuple[Path, str]],
     val_fraction: float = 0.1,
-    vocab_size: int = 8000,
-    min_frequency: int = 2,
-) -> dict:
-    """Prepare a BPE-tokenized dataset."""
+    seed: int = 1337,
+) -> tuple[list[str], list[str]]:
+    """Split documents into training and validation sets."""
 
     if not 0 < val_fraction < 1:
         raise ValueError(
             "val_fraction must be between 0 and 1."
         )
 
-    text = Path(raw_path).read_text(encoding="utf-8")
+    if len(documents) < 2:
+        raise ValueError(
+            "At least two documents are required for a document-level split."
+        )
 
-    if not text:
-        raise ValueError("Dataset cannot be empty.")
+    rng = np.random.default_rng(seed)
+    indices = rng.permutation(len(documents))
 
-    split = int(len(text) * (1 - val_fraction))
-    train_text = text[:split]
-    val_text = text[split:]
+    val_count = max(1, round(len(documents) * val_fraction))
+    val_count = min(val_count, len(documents) - 1)
+
+    val_indices = set(indices[:val_count])
+
+    train_texts = [
+        text
+        for index, (_, text) in enumerate(documents)
+        if index not in val_indices
+    ]
+
+    val_texts = [
+        text
+        for index, (_, text) in enumerate(documents)
+        if index in val_indices
+    ]
+
+    return train_texts, val_texts
+
+
+def prepare_data(
+    raw_path: str | Path,
+    out_dir: str | Path,
+    val_fraction: float = 0.1,
+    vocab_size: int = 8000,
+    min_frequency: int = 2,
+    seed: int = 1337,
+) -> dict:
+    """Prepare a BPE-tokenized dataset from one or more text documents."""
+
+    if not 0 < val_fraction < 1:
+        raise ValueError(
+            "val_fraction must be between 0 and 1."
+        )
+
+    documents = load_documents(raw_path)
+
+    if len(documents) == 1:
+        text = documents[0][1]
+
+        split = int(len(text) * (1 - val_fraction))
+
+        train_texts = [text[:split]]
+        val_texts = [text[split:]]
+
+        if not train_texts[0] or not val_texts[0]:
+            raise ValueError(
+                "Document is too short to create training and validation splits."
+            )
+
+        split_method = "character"
+
+    else:
+        train_texts, val_texts = split_documents(
+            documents,
+            val_fraction=val_fraction,
+            seed=seed,
+        )
+
+        split_method = "document"
 
     print("Training BPE tokenizer...")
+
     tokenizer = BPETokenizer.train(
-        train_text,
+        "\n".join(train_texts),
         vocab_size=vocab_size,
         min_frequency=min_frequency,
     )
+
+    train_text = "\n".join(train_texts)
+    val_text = "\n".join(val_texts)
 
     train_ids = np.array(
         tokenizer.encode(train_text),
         dtype=np.uint16,
     )
+
     val_ids = np.array(
         tokenizer.encode(val_text),
         dtype=np.uint16,
@@ -97,10 +156,14 @@ def prepare_data(
     tokenizer.save(out_dir / "tokenizer.json")
 
     return {
-        "characters": len(text),
+        "documents": len(documents),
+        "split_method": split_method,
+        "characters": sum(len(text) for _, text in documents),
         "vocab_size": tokenizer.vocab_size,
         "train_tokens": len(train_ids),
         "val_tokens": len(val_ids),
+        "train_documents": len(train_texts),
+        "val_documents": len(val_texts),
     }
 
 

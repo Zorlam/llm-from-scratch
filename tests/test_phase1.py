@@ -66,11 +66,7 @@ def test_prepare_data(tmp_path):
 
     output_dir = tmp_path / "out"
 
-    stats = prepare_data(
-        raw,
-        output_dir,
-        val_fraction=0.1,
-    )
+    stats = prepare_data(raw, output_dir, val_fraction=0.1)
 
     train = np.fromfile(
         output_dir / "train.bin",
@@ -91,12 +87,13 @@ def test_prepare_data(tmp_path):
     train_text = text[:split]
     val_text = text[split:]
 
-    assert stats["characters"] == len(text)
+    assert stats["documents"] == 1
+    assert stats["split_method"] == "character"
+    assert stats["train_documents"] == 1
+    assert stats["val_documents"] == 1
 
     assert len(train) == stats["train_tokens"]
     assert len(val) == stats["val_tokens"]
-
-    assert stats["train_tokens"] + stats["val_tokens"] < stats["characters"]
 
     assert train.max() < tokenizer.vocab_size
     assert val.max() < tokenizer.vocab_size
