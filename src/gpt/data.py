@@ -1,10 +1,53 @@
-"""Dataset preparation and batch sampling."""
+"""Dataset loading, preparation, and batch sampling."""
 
 from pathlib import Path
 
 import numpy as np
 
 from gpt.tokenizer import BPETokenizer
+
+
+def load_documents(input_path: str | Path) -> list[tuple[Path, str]]:
+    """Load text documents from a file or recursively from a directory.
+
+    Returns:
+        A list of (source_path, document_text) tuples.
+    """
+
+    input_path = Path(input_path)
+
+    if not input_path.exists():
+        raise FileNotFoundError(
+            f"Input path does not exist: {input_path}"
+        )
+
+    if input_path.is_file():
+        files = [input_path]
+
+    elif input_path.is_dir():
+        files = sorted(input_path.rglob("*.txt"))
+
+    else:
+        raise ValueError(
+            f"Input path must be a file or directory: {input_path}"
+        )
+
+    documents = []
+
+    for file_path in files:
+        text = file_path.read_text(encoding="utf-8")
+
+        if not text.strip():
+            continue
+
+        documents.append((file_path, text))
+
+    if not documents:
+        raise ValueError(
+            f"No non-empty text documents found in: {input_path}"
+        )
+
+    return documents
 
 
 def prepare_data(
@@ -27,12 +70,10 @@ def prepare_data(
         raise ValueError("Dataset cannot be empty.")
 
     split = int(len(text) * (1 - val_fraction))
-
     train_text = text[:split]
     val_text = text[split:]
 
     print("Training BPE tokenizer...")
-
     tokenizer = BPETokenizer.train(
         train_text,
         vocab_size=vocab_size,
@@ -43,7 +84,6 @@ def prepare_data(
         tokenizer.encode(train_text),
         dtype=np.uint16,
     )
-
     val_ids = np.array(
         tokenizer.encode(val_text),
         dtype=np.uint16,
@@ -54,7 +94,6 @@ def prepare_data(
 
     train_ids.tofile(out_dir / "train.bin")
     val_ids.tofile(out_dir / "val.bin")
-
     tokenizer.save(out_dir / "tokenizer.json")
 
     return {
