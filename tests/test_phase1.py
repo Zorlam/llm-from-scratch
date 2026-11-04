@@ -82,6 +82,7 @@ def test_prepare_data(tmp_path):
         output_dir / "tokenizer.json"
     )
 
+
     split = int(len(text) * 0.9)
 
     train_text = text[:split]

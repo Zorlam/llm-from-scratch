@@ -46,24 +46,36 @@ class CharTokenizer:
 class BPETokenizer:
     """Byte-level Byte Pair Encoding tokenizer."""
 
+    END_OF_DOCUMENT = "<|endoftext|>"
+
     def __init__(self, tokenizer: Tokenizer):
         self.tokenizer = tokenizer
 
     @classmethod
     def train(
         cls,
-        text: str,
+        text: str | list[str],
         vocab_size: int = 8000,
         min_frequency: int = 2,
     ) -> "BPETokenizer":
-        """Train a BPE tokenizer on a text corpus."""
+        """Train a BPE tokenizer on one or more text documents."""
 
-        if not text:
+        if isinstance(text, str):
+            texts = [text]
+        else:
+            texts = list(text)
+
+        if not texts or not any(texts):
             raise ValueError("Training text cannot be empty.")
 
         if vocab_size < 300:
             raise ValueError(
                 "vocab_size must be at least 300 for byte-level BPE."
+            )
+
+        if vocab_size > 65536:
+            raise ValueError(
+                "vocab_size cannot exceed 65536 when using uint16 storage."
             )
 
         if min_frequency < 1:
@@ -85,12 +97,15 @@ class BPETokenizer:
         trainer = trainers.BpeTrainer(
             vocab_size=vocab_size,
             min_frequency=min_frequency,
-            special_tokens=["[UNK]"],
+            special_tokens=[
+                "[UNK]",
+                cls.END_OF_DOCUMENT,
+            ],
             initial_alphabet=byte_level.alphabet(),
         )
 
         tokenizer.train_from_iterator(
-            [text],
+            texts,
             trainer=trainer,
         )
 
@@ -99,6 +114,19 @@ class BPETokenizer:
     @property
     def vocab_size(self) -> int:
         return self.tokenizer.get_vocab_size()
+
+    @property
+    def end_of_document_id(self) -> int:
+        token_id = self.tokenizer.token_to_id(
+            self.END_OF_DOCUMENT
+        )
+
+        if token_id is None:
+            raise ValueError(
+                "Tokenizer does not contain the end-of-document token."
+            )
+
+        return token_id
 
     def encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text).ids

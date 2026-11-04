@@ -86,6 +86,21 @@ def split_documents(
     return train_texts, val_texts
 
 
+def encode_documents(
+    documents: list[str],
+    tokenizer: BPETokenizer,
+) -> np.ndarray:
+    """Encode documents and append an end-of-document token to each."""
+
+    token_ids = []
+
+    for document in documents:
+        token_ids.extend(tokenizer.encode(document))
+        token_ids.append(tokenizer.end_of_document_id)
+
+    return np.array(token_ids, dtype=np.uint16)
+
+
 def prepare_data(
     raw_path: str | Path,
     out_dir: str | Path,
@@ -130,23 +145,13 @@ def prepare_data(
     print("Training BPE tokenizer...")
 
     tokenizer = BPETokenizer.train(
-        "\n".join(train_texts),
+        train_texts,
         vocab_size=vocab_size,
         min_frequency=min_frequency,
     )
 
-    train_text = "\n".join(train_texts)
-    val_text = "\n".join(val_texts)
-
-    train_ids = np.array(
-        tokenizer.encode(train_text),
-        dtype=np.uint16,
-    )
-
-    val_ids = np.array(
-        tokenizer.encode(val_text),
-        dtype=np.uint16,
-    )
+    train_ids = encode_documents(train_texts, tokenizer)
+    val_ids = encode_documents(val_texts, tokenizer)
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
