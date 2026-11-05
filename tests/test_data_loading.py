@@ -63,3 +63,18 @@ def test_directory_without_valid_documents_raises_error(tmp_path):
 
     with pytest.raises(ValueError):
         load_documents(tmp_path)
+
+def test_documents_are_normalized_when_loaded(tmp_path):
+    first = tmp_path / "first.txt"
+    first.write_text(
+        "\ufeffFirst document.\r\n\r\n\r\nSecond paragraph.\x00",
+        encoding="utf-8",
+    )
+
+    documents = load_documents(tmp_path)
+
+    assert len(documents) == 1
+
+    expected = "First document.\n\nSecond paragraph."
+
+    assert documents[0][1] == expected

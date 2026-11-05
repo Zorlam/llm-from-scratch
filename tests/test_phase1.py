@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from gpt.data import get_batch, prepare_data
 from gpt.tokenizer import CharTokenizer, BPETokenizer
+from gpt.data import prepare_data, get_batch, normalize_text
 
 
 def test_char_tokenizer_roundtrip():
@@ -82,11 +82,11 @@ def test_prepare_data(tmp_path):
         output_dir / "tokenizer.json"
     )
 
+    normalized_text = normalize_text(text)
+    split = int(len(normalized_text) * 0.9)
 
-    split = int(len(text) * 0.9)
-
-    train_text = text[:split]
-    val_text = text[split:]
+    train_text = normalized_text[:split]
+    val_text = normalized_text[split:]
 
     assert stats["documents"] == 1
     assert stats["split_method"] == "character"

@@ -1,6 +1,8 @@
 """Dataset loading, preparation, and batch sampling."""
 
 import hashlib
+import re
+import unicodedata
 from pathlib import Path
 
 import numpy as np
@@ -8,8 +10,38 @@ import numpy as np
 from gpt.tokenizer import BPETokenizer
 
 
+def normalize_text(text: str) -> str:
+    """Normalize text while preserving meaningful formatting."""
+
+    # Remove UTF-8 byte-order marks at the beginning.
+    text = text.lstrip("\ufeff")
+
+    # Normalize different line-ending formats.
+    text = text.replace("\r\n", "\n")
+    text = text.replace("\r", "\n")
+
+    # Remove unwanted control characters.
+    text = "".join(
+        character
+        for character in text
+        if character in "\n\t"
+        or unicodedata.category(character) != "Cc"
+    )
+
+    # Remove trailing spaces and tabs from individual lines.
+    text = re.sub(r"[ \t]+(?=\n)", "", text)
+
+    # Reduce three or more consecutive newlines to two.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # Remove trailing whitespace from the document.
+    text = text.rstrip(" \t\n")
+
+    return text
+
+
 def load_documents(input_path: str | Path) -> list[tuple[Path, str]]:
-    """Load text documents from a file or recursively from a directory."""
+    """Load and normalize text documents from a file or directory."""
 
     input_path = Path(input_path)
 
@@ -33,6 +65,8 @@ def load_documents(input_path: str | Path) -> list[tuple[Path, str]]:
 
     for file_path in files:
         text = file_path.read_text(encoding="utf-8")
+
+        text = normalize_text(text)
 
         if not text.strip():
             continue
@@ -136,7 +170,7 @@ def prepare_data(
     min_frequency: int = 2,
     seed: int = 1337,
 ) -> dict:
-    """Prepare a deduplicated BPE-tokenized dataset."""
+    """Prepare a normalized, deduplicated BPE-tokenized dataset."""
 
     if not 0 < val_fraction < 1:
         raise ValueError(
