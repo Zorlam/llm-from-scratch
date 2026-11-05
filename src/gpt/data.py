@@ -1,5 +1,6 @@
 """Dataset loading, preparation, and batch sampling."""
 
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +45,32 @@ def load_documents(input_path: str | Path) -> list[tuple[Path, str]]:
         )
 
     return documents
+
+
+def deduplicate_documents(
+    documents: list[tuple[Path, str]],
+) -> tuple[list[tuple[Path, str]], int]:
+    """Remove exact duplicate documents using SHA-256 hashes."""
+
+    seen_hashes = set()
+    unique_documents = []
+
+    for document in documents:
+        path, text = document
+
+        document_hash = hashlib.sha256(
+            text.encode("utf-8")
+        ).hexdigest()
+
+        if document_hash in seen_hashes:
+            continue
+
+        seen_hashes.add(document_hash)
+        unique_documents.append((path, text))
+
+    duplicates_removed = len(documents) - len(unique_documents)
+
+    return unique_documents, duplicates_removed
 
 
 def split_documents(
@@ -109,7 +136,7 @@ def prepare_data(
     min_frequency: int = 2,
     seed: int = 1337,
 ) -> dict:
-    """Prepare a BPE-tokenized dataset from one or more text documents."""
+    """Prepare a deduplicated BPE-tokenized dataset."""
 
     if not 0 < val_fraction < 1:
         raise ValueError(
@@ -117,6 +144,12 @@ def prepare_data(
         )
 
     documents = load_documents(raw_path)
+
+    original_document_count = len(documents)
+
+    documents, duplicates_removed = deduplicate_documents(
+        documents
+    )
 
     if len(documents) == 1:
         text = documents[0][1]
@@ -161,7 +194,9 @@ def prepare_data(
     tokenizer.save(out_dir / "tokenizer.json")
 
     return {
-        "documents": len(documents),
+        "documents": original_document_count,
+        "unique_documents": len(documents),
+        "duplicates_removed": duplicates_removed,
         "split_method": split_method,
         "characters": sum(len(text) for _, text in documents),
         "vocab_size": tokenizer.vocab_size,
