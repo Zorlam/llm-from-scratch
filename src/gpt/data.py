@@ -7,20 +7,41 @@ from pathlib import Path
 
 import numpy as np
 
+from gpt.cleaning import clean_document
 from gpt.tokenizer import BPETokenizer
+
+
+# Supported file extensions and their source types.
+SUPPORTED_EXTENSIONS = {
+    ".txt": "plain_text",
+    ".md": "plain_text",
+    ".rst": "plain_text",
+    ".html": "html",
+    ".htm": "html",
+    ".py": "code",
+    ".js": "code",
+    ".ts": "code",
+    ".jsx": "code",
+    ".tsx": "code",
+    ".java": "code",
+    ".cpp": "code",
+    ".c": "code",
+    ".h": "code",
+    ".hpp": "code",
+    ".go": "code",
+    ".rs": "code",
+    ".sql": "code",
+}
 
 
 def normalize_text(text: str) -> str:
     """Normalize text while preserving meaningful formatting."""
 
-    # Remove UTF-8 byte-order marks at the beginning.
     text = text.lstrip("\ufeff")
 
-    # Normalize different line-ending formats.
     text = text.replace("\r\n", "\n")
     text = text.replace("\r", "\n")
 
-    # Remove unwanted control characters.
     text = "".join(
         character
         for character in text
@@ -28,20 +49,17 @@ def normalize_text(text: str) -> str:
         or unicodedata.category(character) != "Cc"
     )
 
-    # Remove trailing spaces and tabs from individual lines.
     text = re.sub(r"[ \t]+(?=\n)", "", text)
 
-    # Reduce three or more consecutive newlines to two.
     text = re.sub(r"\n{3,}", "\n\n", text)
 
-    # Remove trailing whitespace from the document.
     text = text.rstrip(" \t\n")
 
     return text
 
 
 def load_documents(input_path: str | Path) -> list[tuple[Path, str]]:
-    """Load and normalize text documents from a file or directory."""
+    """Load and clean supported documents from a file or directory."""
 
     input_path = Path(input_path)
 
@@ -54,7 +72,12 @@ def load_documents(input_path: str | Path) -> list[tuple[Path, str]]:
         files = [input_path]
 
     elif input_path.is_dir():
-        files = sorted(input_path.rglob("*.txt"))
+        files = sorted(
+            file_path
+            for file_path in input_path.rglob("*")
+            if file_path.is_file()
+            and file_path.suffix.lower() in SUPPORTED_EXTENSIONS
+        )
 
     else:
         raise ValueError(
@@ -64,9 +87,26 @@ def load_documents(input_path: str | Path) -> list[tuple[Path, str]]:
     documents = []
 
     for file_path in files:
+        source_type = SUPPORTED_EXTENSIONS.get(
+            file_path.suffix.lower()
+        )
+
+        if source_type is None:
+            raise ValueError(
+                f"Unsupported file extension: {file_path.suffix}"
+            )
+
         text = file_path.read_text(encoding="utf-8")
 
-        text = normalize_text(text)
+        text = clean_document(
+            text,
+            source_type=source_type,
+        )
+
+        # Code must retain its original formatting.
+        # Plain text and extracted HTML receive normalization.
+        if source_type != "code":
+            text = normalize_text(text)
 
         if not text.strip():
             continue
@@ -75,7 +115,7 @@ def load_documents(input_path: str | Path) -> list[tuple[Path, str]]:
 
     if not documents:
         raise ValueError(
-            f"No non-empty text documents found in: {input_path}"
+            f"No non-empty supported documents found in: {input_path}"
         )
 
     return documents
