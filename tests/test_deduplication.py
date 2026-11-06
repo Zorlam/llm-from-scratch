@@ -3,6 +3,7 @@ from pathlib import Path
 from gpt.data import deduplicate_documents
 
 
+
 def test_duplicate_documents_are_removed():
     documents = [
         (Path("first.txt"), "Hello world."),
