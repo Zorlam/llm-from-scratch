@@ -51,9 +51,7 @@ def normalize_text(text: str) -> str:
     )
 
     text = re.sub(r"[ \t]+(?=\n)", "", text)
-
     text = re.sub(r"\n{3,}", "\n\n", text)
-
     text = text.rstrip(" \t\n")
 
     return text
@@ -104,8 +102,6 @@ def load_documents(input_path: str | Path) -> list[tuple[Path, str]]:
             source_type=source_type,
         )
 
-        # Code must retain its original formatting.
-        # Plain text and extracted HTML receive normalization.
         if source_type != "code":
             text = normalize_text(text)
 
@@ -183,16 +179,7 @@ def deduplicate_near_duplicates(
     num_perm: int = 128,
     min_words: int = 5,
 ) -> tuple[list[tuple[Path, str]], int]:
-    """
-    Remove near-duplicate documents using MinHash and LSH.
-
-    Documents are represented by sets of consecutive word shingles.
-
-    LSH identifies likely duplicate candidates. Their actual Jaccard
-    similarity is then calculated before removing anything.
-
-    The first occurrence of a document is retained.
-    """
+    """Remove near-duplicate documents using MinHash and LSH."""
 
     if not 0 < threshold <= 1:
         raise ValueError(
@@ -217,10 +204,12 @@ def deduplicate_near_duplicates(
     if not documents:
         return [], 0
 
+    # Retrieve a broader candidate set, then verify using the
+    # original Jaccard similarity threshold below.
     lsh = MinHashLSH(
-    threshold=max(0.1, threshold - 0.2),
-    num_perm=num_perm,
-)
+        threshold=max(0.1, threshold - 0.2),
+        num_perm=num_perm,
+    )
 
     unique_documents = []
     unique_shingles = {}
@@ -231,8 +220,6 @@ def deduplicate_near_duplicates(
 
         words = re.findall(r"\w+", text.casefold())
 
-        # Short documents are not reliable candidates for
-        # word-shingle-based near-duplicate detection.
         if len(words) < min_words:
             unique_documents.append((path, text))
             continue
@@ -287,6 +274,68 @@ def deduplicate_near_duplicates(
         unique_documents.append((path, text))
 
     return unique_documents, duplicates_removed
+
+
+def filter_low_quality_documents(
+    documents: list[tuple[Path, str]],
+    min_words: int = 20,
+    max_repeated_line_ratio: float = 0.5,
+) -> tuple[list[tuple[Path, str]], int]:
+    """
+    Remove documents that are too short or excessively repetitive.
+
+    A repeated line is a non-empty line that has appeared previously
+    in the same document. Repetition is calculated as the proportion
+    of non-empty lines that are repeated.
+    """
+
+    if min_words < 0:
+        raise ValueError(
+            "min_words cannot be negative."
+        )
+
+    if not 0 <= max_repeated_line_ratio <= 1:
+        raise ValueError(
+            "max_repeated_line_ratio must be between 0 and 1."
+        )
+
+    unique_documents = []
+    documents_removed = 0
+
+    for path, text in documents:
+        words = re.findall(r"\w+", text)
+
+        if len(words) < min_words:
+            documents_removed += 1
+            continue
+
+        lines = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip()
+        ]
+
+        if lines:
+            seen_lines = set()
+            repeated_lines = 0
+
+            for line in lines:
+                if line in seen_lines:
+                    repeated_lines += 1
+                else:
+                    seen_lines.add(line)
+
+            repeated_line_ratio = (
+                repeated_lines / len(lines)
+            )
+
+            if repeated_line_ratio > max_repeated_line_ratio:
+                documents_removed += 1
+                continue
+
+        unique_documents.append((path, text))
+
+    return unique_documents, documents_removed
 
 
 def split_documents(
@@ -371,6 +420,15 @@ def prepare_data(
         documents
     )
 
+    documents, low_quality_removed = filter_low_quality_documents(
+        documents
+    )
+
+    if not documents:
+        raise ValueError(
+            "No documents remain after duplicate and quality filtering."
+        )
+
     if len(documents) == 1:
         text = documents[0][1]
 
@@ -418,6 +476,7 @@ def prepare_data(
         "unique_documents": len(documents),
         "duplicates_removed": duplicates_removed,
         "near_duplicates_removed": near_duplicates_removed,
+        "low_quality_removed": low_quality_removed,
         "split_method": split_method,
         "characters": sum(len(text) for _, text in documents),
         "vocab_size": tokenizer.vocab_size,
