@@ -6,6 +6,7 @@ import unicodedata
 from pathlib import Path
 
 import numpy as np
+from datasketch import MinHash, MinHashLSH
 
 from gpt.cleaning import clean_document
 from gpt.tokenizer import BPETokenizer
@@ -147,6 +148,147 @@ def deduplicate_documents(
     return unique_documents, duplicates_removed
 
 
+def _create_shingles(
+    text: str,
+    shingle_size: int,
+) -> set[tuple[str, ...]]:
+    """Create word-based shingles from a document."""
+
+    words = re.findall(r"\w+", text.casefold())
+
+    return {
+        tuple(words[index:index + shingle_size])
+        for index in range(len(words) - shingle_size + 1)
+    }
+
+
+def _create_minhash(
+    shingles: set[tuple[str, ...]],
+    num_perm: int,
+) -> MinHash:
+    """Create a MinHash signature from document shingles."""
+
+    minhash = MinHash(num_perm=num_perm)
+
+    for shingle in sorted(shingles):
+        minhash.update(" ".join(shingle).encode("utf-8"))
+
+    return minhash
+
+
+def deduplicate_near_duplicates(
+    documents: list[tuple[Path, str]],
+    threshold: float = 0.75,
+    shingle_size: int = 3,
+    num_perm: int = 128,
+    min_words: int = 5,
+) -> tuple[list[tuple[Path, str]], int]:
+    """
+    Remove near-duplicate documents using MinHash and LSH.
+
+    Documents are represented by sets of consecutive word shingles.
+
+    LSH identifies likely duplicate candidates. Their actual Jaccard
+    similarity is then calculated before removing anything.
+
+    The first occurrence of a document is retained.
+    """
+
+    if not 0 < threshold <= 1:
+        raise ValueError(
+            "threshold must be greater than 0 and at most 1."
+        )
+
+    if shingle_size < 1:
+        raise ValueError(
+            "shingle_size must be at least 1."
+        )
+
+    if num_perm < 16:
+        raise ValueError(
+            "num_perm must be at least 16."
+        )
+
+    if min_words < shingle_size:
+        raise ValueError(
+            "min_words cannot be smaller than shingle_size."
+        )
+
+    if not documents:
+        return [], 0
+
+    lsh = MinHashLSH(
+    threshold=max(0.1, threshold - 0.2),
+    num_perm=num_perm,
+)
+
+    unique_documents = []
+    unique_shingles = {}
+    duplicates_removed = 0
+
+    for document in documents:
+        path, text = document
+
+        words = re.findall(r"\w+", text.casefold())
+
+        # Short documents are not reliable candidates for
+        # word-shingle-based near-duplicate detection.
+        if len(words) < min_words:
+            unique_documents.append((path, text))
+            continue
+
+        shingles = _create_shingles(
+            text,
+            shingle_size,
+        )
+
+        if not shingles:
+            unique_documents.append((path, text))
+            continue
+
+        minhash = _create_minhash(
+            shingles,
+            num_perm,
+        )
+
+        candidates = lsh.query(minhash)
+
+        is_duplicate = False
+
+        for candidate_key in candidates:
+            candidate_shingles = unique_shingles[candidate_key]
+
+            intersection = len(
+                shingles & candidate_shingles
+            )
+
+            union = len(
+                shingles | candidate_shingles
+            )
+
+            similarity = intersection / union
+
+            if similarity >= threshold:
+                is_duplicate = True
+                break
+
+        if is_duplicate:
+            duplicates_removed += 1
+            continue
+
+        document_key = str(len(unique_documents))
+
+        lsh.insert(
+            document_key,
+            minhash,
+        )
+
+        unique_shingles[document_key] = shingles
+        unique_documents.append((path, text))
+
+    return unique_documents, duplicates_removed
+
+
 def split_documents(
     documents: list[tuple[Path, str]],
     val_fraction: float = 0.1,
@@ -225,6 +367,10 @@ def prepare_data(
         documents
     )
 
+    documents, near_duplicates_removed = deduplicate_near_duplicates(
+        documents
+    )
+
     if len(documents) == 1:
         text = documents[0][1]
 
@@ -271,6 +417,7 @@ def prepare_data(
         "documents": original_document_count,
         "unique_documents": len(documents),
         "duplicates_removed": duplicates_removed,
+        "near_duplicates_removed": near_duplicates_removed,
         "split_method": split_method,
         "characters": sum(len(text) for _, text in documents),
         "vocab_size": tokenizer.vocab_size,
