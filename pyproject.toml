@@ -12,6 +12,8 @@ dependencies = [
     "torch>=2.2",
     "tokenizers>=0.20",
     "beautifulsoup4>=4.12",
+    "datasketch>=1.6",
+    "langdetect>=1.0.9",
 ]
 
 [tool.setuptools.packages.find]
