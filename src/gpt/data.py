@@ -9,6 +9,7 @@ import numpy as np
 from datasketch import MinHash, MinHashLSH
 
 from gpt.cleaning import clean_document
+from gpt.language import detect_language
 from gpt.tokenizer import BPETokenizer
 
 
@@ -338,6 +339,41 @@ def filter_low_quality_documents(
     return unique_documents, documents_removed
 
 
+def get_language_distribution(
+    documents: list[tuple[Path, str]],
+) -> dict[str, int]:
+    """
+    Count documents by detected language.
+
+    Programming-language source files are counted as unknown because
+    natural-language detection is not designed to classify source code.
+    Documents without a reliable language prediction are also counted
+    as unknown.
+
+    Non-English documents are retained.
+    """
+
+    distribution = {}
+
+    for path, text in documents:
+        source_type = SUPPORTED_EXTENSIONS.get(
+            path.suffix.lower()
+        )
+
+        if source_type == "code":
+            language = None
+        else:
+            language, _ = detect_language(text)
+
+        language = language or "unknown"
+
+        distribution[language] = (
+            distribution.get(language, 0) + 1
+        )
+
+    return dict(sorted(distribution.items()))
+
+
 def split_documents(
     documents: list[tuple[Path, str]],
     val_fraction: float = 0.1,
@@ -429,6 +465,10 @@ def prepare_data(
             "No documents remain after duplicate and quality filtering."
         )
 
+    language_distribution = get_language_distribution(
+        documents
+    )
+
     if len(documents) == 1:
         text = documents[0][1]
 
@@ -477,6 +517,7 @@ def prepare_data(
         "duplicates_removed": duplicates_removed,
         "near_duplicates_removed": near_duplicates_removed,
         "low_quality_removed": low_quality_removed,
+        "language_distribution": language_distribution,
         "split_method": split_method,
         "characters": sum(len(text) for _, text in documents),
         "vocab_size": tokenizer.vocab_size,
