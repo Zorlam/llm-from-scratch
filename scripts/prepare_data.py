@@ -1,3 +1,4 @@
+
 """Prepare a BPE-tokenized training dataset."""
 
 import argparse
@@ -50,7 +51,17 @@ def main():
     print("\nDataset preparation complete.")
 
     for key, value in stats.items():
-        print(f"{key}: {value:,}")
+        if isinstance(value, dict):
+            print(f"\n{key.replace('_', ' ').title()}:")
+
+            for sub_key, sub_value in value.items():
+                print(f"  {sub_key}: {sub_value:,}")
+
+        elif isinstance(value, (int, float)):
+            print(f"{key}: {value:,}")
+
+        else:
+            print(f"{key}: {value}")
 
 
 if __name__ == "__main__":
