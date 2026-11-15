@@ -108,6 +108,47 @@ def load_model():
 
 
 # --------------------------------------------------
+# Diagnose invalid UTF-8 output
+# --------------------------------------------------
+
+def diagnose_replacement_character(tokenizer, token_ids, generated_text):
+    """Inspect token IDs surrounding replacement characters."""
+
+    if "\ufffd" not in generated_text:
+        print("\nNo replacement characters detected.")
+        return
+
+    print("\nWARNING: Replacement character detected.")
+    print("Inspecting generated token IDs...")
+
+    decoded_prefix = ""
+
+    for index in range(len(token_ids)):
+        decoded_prefix = tokenizer.decode(
+            token_ids[:index + 1]
+        )
+
+        if "\ufffd" in decoded_prefix:
+            start = max(0, index - 5)
+            end = min(len(token_ids), index + 6)
+
+            print(f"\nFirst detected at token position: {index}")
+
+            print("\nSurrounding tokens:")
+
+            for token_index in range(start, end):
+                token_id = token_ids[token_index]
+                token = tokenizer.tokenizer.id_to_token(token_id)
+
+                print(
+                    f"Position {token_index}: "
+                    f"ID={token_id}, Token={repr(token)}"
+                )
+
+            break
+
+
+# --------------------------------------------------
 # Generate text
 # --------------------------------------------------
 
@@ -172,8 +213,14 @@ def main():
             temperature=args.temperature,
         )
 
-    generated_text = tokenizer.decode(
-        generated[0].tolist()
+    generated_ids = generated[0].tolist()
+
+    generated_text = tokenizer.decode(generated_ids)
+
+    diagnose_replacement_character(
+        tokenizer,
+        generated_ids,
+        generated_text,
     )
 
     print("\n" + "=" * 50)
