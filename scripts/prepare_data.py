@@ -14,8 +14,8 @@ def main():
     parser.add_argument(
         "--input",
         type=str,
-        default="data/raw/tinyshakespeare.txt",
-        help="Path to the raw text dataset.",
+        default="data/raw",
+        help="Path to a raw text file or directory of text files.",
     )
 
     parser.add_argument(
