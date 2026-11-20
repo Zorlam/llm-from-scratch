@@ -22,35 +22,112 @@ DATASETS = {
         ),
         "source": "Tiny Shakespeare",
         "min_bytes": 100_000,
+        "encoding": "utf-8-sig",
         "gutenberg": False,
     },
     "frankenstein.txt": {
-        "url": "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "GITenberg/Frankenstein_84/master/84-0.txt"
+        ),
         "source": "Frankenstein - Mary Shelley",
         "min_bytes": 100_000,
+        "encoding": "utf-8-sig",
         "gutenberg": True,
+        "title": "Frankenstein",
     },
     "alice_in_wonderland.txt": {
-        "url": "https://www.gutenberg.org/cache/epub/11/pg11.txt",
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "GITenberg/Alice-s-Adventures-in-Wonderland_11/"
+            "master/11-0.txt"
+        ),
         "source": "Alice's Adventures in Wonderland - Lewis Carroll",
         "min_bytes": 100_000,
+        "encoding": "utf-8-sig",
         "gutenberg": True,
+        "title": "Alice's Adventures in Wonderland",
     },
     "sherlock_holmes.txt": {
-        "url": "https://www.gutenberg.org/cache/epub/1661/pg1661.txt",
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "GITenberg/The-Adventures-of-Sherlock-Holmes_1661/"
+            "master/1661-8.txt"
+        ),
         "source": "The Adventures of Sherlock Holmes - Arthur Conan Doyle",
         "min_bytes": 100_000,
+        "encoding": "cp1252",
         "gutenberg": True,
+        "title": "The Adventures of Sherlock Holmes",
     },
 }
+
+
+# --------------------------------------------------
+# Validation helpers
+# --------------------------------------------------
+
+def normalize_text(text: str) -> str:
+    """Normalize apostrophes for reliable title comparisons."""
+    return (
+        text.casefold()
+        .replace("’", "'")
+        .replace("‘", "'")
+    )
+
+
+def validate_gutenberg(text: str, expected_title: str) -> None:
+    """Validate modern and legacy Project Gutenberg text formats."""
+
+    normalized = normalize_text(text)
+
+    start_marker = "*** start of the project gutenberg"
+    end_marker = "*** end of the project gutenberg"
+
+    has_start_marker = start_marker in normalized
+    has_end_marker = end_marker in normalized
+
+    if has_start_marker:
+        if not has_end_marker:
+            raise ValueError(
+                "Gutenberg start marker exists, but the end marker "
+                "is missing. The download may be incomplete."
+            )
+        return
+
+    # Older GITenberg editions use a different header/footer format.
+    header = normalize_text(text[:2000])
+    footer = normalize_text(text[-2000:])
+    title = normalize_text(expected_title)
+
+    if "project gutenberg" not in header:
+        raise ValueError("Project Gutenberg header was not found.")
+
+    if title not in header:
+        raise ValueError(
+            f"Expected book title was not found in the header: "
+            f"{expected_title}"
+        )
+
+    if "most people start at our web site" not in footer:
+        raise ValueError(
+            "Legacy Gutenberg footer was not found. "
+            "The download may be incomplete."
+        )
 
 
 # --------------------------------------------------
 # Download and validation
 # --------------------------------------------------
 
-def download_dataset(url: str, min_bytes: int, gutenberg: bool) -> bytes:
-    """Download a dataset and validate its contents before saving."""
+def download_dataset(
+    url: str,
+    min_bytes: int,
+    encoding: str,
+    gutenberg: bool,
+    title: str | None = None,
+) -> bytes:
+    """Download, decode, validate, and return UTF-8 content."""
 
     request = urllib.request.Request(
         url,
@@ -71,7 +148,7 @@ def download_dataset(url: str, min_bytes: int, gutenberg: bool) -> bytes:
 
         if "text/html" in content_type:
             raise ValueError(
-                "The server returned an HTML page instead of plain text."
+                "The server returned HTML instead of plain text."
             )
 
         content = response.read()
@@ -82,35 +159,37 @@ def download_dataset(url: str, min_bytes: int, gutenberg: bool) -> bytes:
         )
 
     try:
-        text = content.decode("utf-8-sig")
+        text = content.decode(encoding)
     except UnicodeDecodeError as error:
         raise ValueError(
-            "Downloaded content is not valid UTF-8."
+            f"Downloaded content is not valid {encoding}."
         ) from error
 
     if not text.strip():
         raise ValueError("Downloaded file is empty.")
 
-    beginning = text[:2000].lower()
+    beginning = text[:2000].casefold()
 
     if "<!doctype html" in beginning or "<html" in beginning:
         raise ValueError(
             "Downloaded content appears to be an HTML page."
         )
 
+    if "�" in text:
+        raise ValueError(
+            "Decoded content contains replacement characters."
+        )
+
     if gutenberg:
-        if "*** start of the project gutenberg" not in text.lower():
+        if title is None:
             raise ValueError(
-                "Project Gutenberg start marker was not found."
+                "A title is required for Gutenberg validation."
             )
 
-        if "*** end of the project gutenberg" not in text.lower():
-            raise ValueError(
-                "Project Gutenberg end marker was not found. "
-                "The download may be incomplete."
-            )
+        validate_gutenberg(text, title)
 
-    return content
+    # Store all datasets consistently as UTF-8.
+    return text.encode("utf-8")
 
 
 # --------------------------------------------------
@@ -154,16 +233,18 @@ def main():
 
         try:
             content = download_dataset(
-                dataset["url"],
-                dataset["min_bytes"],
-                dataset["gutenberg"],
+                url=dataset["url"],
+                min_bytes=dataset["min_bytes"],
+                encoding=dataset["encoding"],
+                gutenberg=dataset["gutenberg"],
+                title=dataset.get("title"),
             )
 
             output_path.write_bytes(content)
 
             print(
                 f"Downloaded: {output_path} "
-                f"({len(content):,} bytes)"
+                f"({len(content):,} bytes, UTF-8)"
             )
 
             successful += 1
