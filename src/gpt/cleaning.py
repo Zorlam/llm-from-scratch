@@ -1,7 +1,9 @@
+
 """Source-aware document cleaning utilities."""
 
+import re
+
 from bs4 import BeautifulSoup, NavigableString
-from bs4.element import Tag
 
 
 HTML_UNWANTED_TAGS = [
@@ -35,34 +37,41 @@ HTML_BLOCK_TAGS = {
     "tr",
 }
 
+GUTENBERG_START_PATTERN = re.compile(
+    r"^\s*\*{0,3}\s*START OF (?:THE|THIS) PROJECT GUTENBERG"
+    r"(?: EBOOK| EBOOK FILE)?\b.*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+GUTENBERG_END_PATTERN = re.compile(
+    r"^\s*\*{0,3}\s*END OF (?:THE|THIS) PROJECT GUTENBERG"
+    r"(?: EBOOK| EBOOK FILE)?\b.*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 
 def clean_html(text: str) -> str:
     """Extract readable text from HTML while preserving block boundaries."""
 
     soup = BeautifulSoup(text, "html.parser")
 
-    # Remove elements that generally contain non-article content.
     for tag in soup.find_all(HTML_UNWANTED_TAGS):
         tag.decompose()
 
-    # Preserve paragraph and heading boundaries.
     for tag in soup.find_all(HTML_BLOCK_TAGS):
         tag.insert_before(NavigableString("\n"))
         tag.insert_after(NavigableString("\n"))
 
-    # Preserve explicit line breaks.
     for tag in soup.find_all("br"):
         tag.replace_with(NavigableString("\n"))
 
     extracted_text = soup.get_text()
 
-    # Normalize horizontal whitespace without destroying indentation.
     lines = [
         line.strip()
         for line in extracted_text.splitlines()
     ]
 
-    # Remove empty lines and excessive whitespace.
     cleaned_lines = [
         line
         for line in lines
@@ -72,6 +81,27 @@ def clean_html(text: str) -> str:
     return "\n\n".join(cleaned_lines)
 
 
+def clean_gutenberg_text(text: str) -> str:
+    """Remove Project Gutenberg headers and footers when markers exist."""
+
+    start_match = GUTENBERG_START_PATTERN.search(text)
+    end_match = GUTENBERG_END_PATTERN.search(text)
+
+    if start_match and end_match:
+        if start_match.end() >= end_match.start():
+            return text
+
+        text = text[start_match.end():end_match.start()]
+
+    elif end_match:
+        text = text[:end_match.start()]
+
+    elif start_match:
+        text = text[start_match.end():]
+
+    return text.strip()
+
+
 def clean_document(
     text: str,
     source_type: str = "plain_text",
@@ -79,13 +109,12 @@ def clean_document(
     """Apply cleaning appropriate to the document's source type."""
 
     if source_type == "plain_text":
-        return text
+        return clean_gutenberg_text(text)
 
     if source_type == "html":
         return clean_html(text)
 
     if source_type == "code":
-        # Source code must retain its original formatting.
         return text
 
     raise ValueError(
